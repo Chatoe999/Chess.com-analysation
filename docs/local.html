@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Coach — live-тренер на своём компьютере</title>
+<meta name="description" content="Локальный live-тренер для Chess.com: Stockfish на вашем компьютере, без сервера автора и без отправки партий.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap narrow">
+  <header>
+    <h1>♟ Live-тренер</h1>
+    <span class="sub">устанавливается на ваш компьютер</span>
+    <a class="back" href="index.html">← на главную</a>
+  </header>
+
+  <div class="card">
+    <h2>Что это</h2>
+    <p class="muted">
+      Панель на chess.com, которая после каждого хода показывает вердикт: лучший ход,
+      неточность, зевок, жертва. Движок Stockfish работает <b>на вашем компьютере</b>,
+      в вашем браузере. Позиции никуда не отправляются, у автора сайта нет ни сервера,
+      ни доступа к вашим партиям. Эта панель — отдельная программа, а не часть сайта.
+    </p>
+    <div class="warn">
+      <b>⚠️ Fair play.</b> Правила Chess.com запрещают использовать движок в партиях
+      против людей — и в рейтинговых, и в нерейтинговых. Панель годится только для
+      игры против компьютера, тренировки и разбора уже сыгранных партий.
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Установка</h2>
+    <ol class="steps">
+      <li>
+        <b>Скачайте проект.</b> На странице репозитория нажмите
+        <code>Code → Download ZIP</code> и распакуйте, либо выполните
+        <code>git clone &lt;адрес репозитория&gt;</code>.
+      </li>
+      <li>
+        <b>Поставьте Stockfish.</b>
+        <pre>sudo apt install stockfish</pre>
+        На Windows и macOS скачайте сборку с
+        <a href="https://stockfishchess.org/download/" target="_blank" rel="noopener">stockfishchess.org</a>
+        и запомните путь к исполняемому файлу.
+      </li>
+      <li>
+        <b>Поставьте менеджер userscript.</b>
+        <a href="https://addons.mozilla.org/ru/firefox/addon/tampermonkey/" target="_blank" rel="noopener">Tampermonkey</a>
+        или
+        <a href="https://addons.mozilla.org/ru/firefox/addon/violentmonkey/" target="_blank" rel="noopener">Violentmonkey</a>.
+      </li>
+      <li>
+        <b>Запустите локальный сервер</b> в папке проекта:
+        <pre>./start.sh</pre>
+        На Windows: <code>python server.py</code>. Если Stockfish лежит не в <code>PATH</code>:
+        <pre>python3 server.py --engine /путь/к/stockfish</pre>
+        Окно терминала должно оставаться открытым, остановка — <code>Ctrl+C</code>.
+      </li>
+      <li>
+        <b>Откройте</b> <a href="http://127.0.0.1:8765/">http://127.0.0.1:8765/</a>
+        и нажмите «Установить userscript». Tampermonkey покажет окно установки.
+        Можно установить и с этой страницы:
+        <a class="big-link" href="chess-coach.user.js">Установить userscript</a>
+        <div class="muted" style="margin-top:6px">
+          Сервер должен быть запущен: userscript обращается только к
+          <code>127.0.0.1:8765</code> на вашем компьютере.
+        </div>
+      </li>
+      <li>
+        <b>Откройте</b> <a href="https://www.chess.com/play/online" target="_blank" rel="noopener">chess.com</a>
+        и начните партию. Панель появится справа снизу; её можно перетащить за заголовок,
+        двойной клик возвращает в угол.
+      </li>
+    </ol>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Приватность</h2>
+    <p class="muted">
+      Локальный сервер слушает только <code>127.0.0.1</code> — то есть доступен исключительно
+      с вашего компьютера. Userscript отправляет позиции только на этот адрес.
+      Никакой аналитики, аккаунтов и внешних запросов, кроме загрузки страницы chess.com,
+      нет. Логи разобранных партий сохраняются в папку <code>games/</code> на вашем диске.
+    </p>
+  </div>
+
+  <footer>
+    Live-тренер не входит в публичный сайт: он ничего не знает об авторе и не связан
+    с его компьютером. Каждый пользователь запускает свою копию.
+    Лицензии: <a href="vendor/stockfish/Copying.txt">Stockfish (GPLv3)</a>,
+    <a href="vendor/chess.js.LICENSE">chess.js (MIT)</a>.
+  </footer>
+</div>
+
+<script>
+(function () {
+  const status = document.getElementById('status');
+  const local = ['127.0.0.1', 'localhost'].includes(location.hostname);
+  if (!local) {
+    status.textContent = 'Сейчас открыта публичная страница. Сервер запускается на вашем компьютере — см. шаги выше.';
+    return;
+  }
+  fetch('/health')
+    .then((response) => response.json())
+    .then((data) => {
+      status.textContent = data.ok
+        ? '● Локальный сервер работает, движок: ' + (data.engine || 'Stockfish') + ' · глубина ' + data.depth
+        : '● Сервер работает, но Stockfish не найден. Установите его и перезапустите сервер.';
+      status.className = 'status ' + (data.ok ? 'ok' : 'bad');
+    })
+    .catch(() => {
+      status.textContent = '● Локальный сервер не отвечает. Запустите ./start.sh и обновите страницу.';
+      status.className = 'status bad';
+    });
+})();
+</script>
+</body>
+</html>

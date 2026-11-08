@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Coach — разбор партий Chess.com</title>
+<meta name="description" content="Разбор сыгранных партий Chess.com: Stockfish работает в браузере, оценки ходов, точность и зевки.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>♟ Chess Coach</h1>
+    <span class="sub">тренер для Chess.com</span>
+  </header>
+
+  <div class="card">
+    <h2>Разбор партий прямо в браузере</h2>
+    <p class="muted">
+      Введи ник на Chess.com, выбери сыгранную партию — и получишь оценку каждого хода
+      в стиле Game Review: бриллиант, лучший ход, неточность, зевок, а также точность
+      и худший ход. Партии берутся из публичного API Chess.com, поэтому телефон
+      и компьютер связывать не нужно: сыграл с телефона — партия появилась в профиле —
+      разобрал здесь.
+    </p>
+    <a class="big-link" href="review.html">Разобрать партию</a>
+    <div class="warn">
+      <b>⚠️ Fair play.</b> Использовать движок в партиях против людей запрещено правилами
+      Chess.com — и в рейтинговых, и в нерейтинговых. Разбор уже сыгранной партии безопасен.
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:14px">
+    <div class="card">
+      <h2>Live-тренер на своём компьютере</h2>
+      <p class="muted">
+        Панель с оценкой хода прямо на chess.com. Она работает только локально:
+        движок запускается на компьютере самого пользователя, поэтому чужие партии
+        и позиции никуда не отправляются. Это отдельная программа, а не часть сайта.
+      </p>
+      <a class="big-link alt" href="local.html">Как установить</a>
+    </div>
+
+    <div class="card">
+      <h2>Как это устроено</h2>
+      <p class="muted">
+        Сайт статический: здесь нет сервера, базы данных и аналитики. Stockfish скомпилирован
+        в WebAssembly и считает позиции в вашем браузере. Никто, включая автора сайта,
+        не видит, какие партии вы разбираете.
+      </p>
+      <p class="muted">
+        Оценки — приближение к классификации Chess.com, а не её официальный алгоритм.
+        Точность считается по потере вероятности победы.
+      </p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Оценки</h2>
+    <table>
+      <thead><tr><th>Оценка</th><th>Что значит</th></tr></thead>
+      <tbody>
+        <tr><td>💎 Блестящий ход</td><td>лучший ход с настоящей жертвой, после которой позиция остаётся хорошей</td></tr>
+        <tr><td>🔥 Отличный ход</td><td>лучший ход в критической позиции, где остальные ходы заметно хуже</td></tr>
+        <tr><td>✅ Лучший ход</td><td>совпал с первым ходом Stockfish</td></tr>
+        <tr><td>👍 Превосходно</td><td>почти лучший ход, потеря меньше 2% шансов</td></tr>
+        <tr><td>🙂 Хороший ход</td><td>небольшой минус, потеря меньше 5%</td></tr>
+        <tr><td>🤔 Неточность</td><td>потеря 5–10%</td></tr>
+        <tr><td>❌ Ошибка</td><td>потеря 10–20%</td></tr>
+        <tr><td>💀 Зевок</td><td>потеря больше 20%</td></tr>
+        <tr><td>😬 Упущенный шанс</td><td>была выигрышная позиция, но преимущество упущено</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Оценки считает <a href="vendor/stockfish/Copying.txt">Stockfish (GPLv3)</a>,
+    ходы разбирает <a href="vendor/chess.js.LICENSE">chess.js (MIT)</a>.
+    Сайт не использует куки, трекеры и внешнюю аналитику.
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Coach — разбор партии</title>
+<meta name="description" content="Разбор партии Chess.com на Stockfish прямо в браузере: оценка каждого хода, точность и худший ход.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>♟ Chess Coach</h1>
+    <span class="sub">разбор сыгранной партии</span>
+    <a class="back" href="index.html">← на главную</a>
+  </header>
+
+  <div class="card find">
+    <input id="username" placeholder="ник на Chess.com" autocomplete="off" spellcheck="false">
+    <select id="limit" title="Сколько последних партий загрузить">
+      <option value="5">5 партий</option>
+      <option value="8" selected>8 партий</option>
+      <option value="12">12 партий</option>
+    </select>
+    <button class="primary" id="find">Найти партии</button>
+    <span class="status" id="findStatus"></span>
+  </div>
+
+  <div class="cols">
+    <div class="card games">
+      <div class="head">Партии</div>
+      <div id="gameList"><div class="empty">Введи ник и нажми «Найти партии».</div></div>
+    </div>
+
+    <div class="card review">
+      <div class="title" id="reviewTitle">Разбор партии</div>
+      <div class="meta" id="reviewMeta">Выбери партию слева — тренер оценит каждый ход.</div>
+      <div class="toolbar">
+        <button class="primary" id="reviewBtn" disabled>Разобрать партию</button>
+        <select id="depth" title="Глубина анализа: больше — точнее, но медленнее">
+          <option value="10">глубина 10 · быстро</option>
+          <option value="12" selected>глубина 12 · обычно</option>
+          <option value="14">глубина 14 · точнее</option>
+        </select>
+        <button id="cancelBtn" style="display:none">Отменить</button>
+        <span class="engine" id="engineStatus">движок загрузится при первом разборе</span>
+      </div>
+      <div class="bar"><i id="bar"></i></div>
+      <div class="barlabel" id="barLabel"></div>
+      <div class="summary" id="summary"></div>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>№</th><th>Ход</th><th>Оценка</th><th>Eval</th><th>Точн.</th><th>Потеря</th></tr>
+          </thead>
+          <tbody id="moves"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="tableEmpty">Таблица заполнится после разбора.</div>
+    </div>
+  </div>
+
+  <footer>
+    <b>⚠️ Fair play:</b> в партиях против людей использовать движок запрещено — это бан.
+    Здесь оценивается уже сыгранная партия, поэтому разбор безопасен.<br>
+    Партии берутся из публичного API Chess.com. Анализ считается в вашем браузере:
+    сайт не отправляет позиции на сервер и не хранит их.
+    Лицензии: <a href="vendor/stockfish/Copying.txt">Stockfish (GPLv3)</a>,
+    <a href="vendor/chess.js.LICENSE">chess.js (MIT)</a>.
+  </footer>
+</div>
+
+<script type="module">
+import { Engine, reviewGame, DEFAULTS } from './analysis.js';
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  games: [],
+  selected: null,
+  moves: [],
+  running: false,
+  cancel: false,
+  player: '',
+  engine: null,
+  engineReady: false,
+};
+
+// ---------------------------------------------------------------------------
+// Партии с публичного API Chess.com
+// ---------------------------------------------------------------------------
+
+async function latestGames(username, limit) {
+  const url = 'https://api.chess.com/pub/player/' +
+    encodeURIComponent(username.toLowerCase()) + '/games/archives';
+  const response = await fetch(url);
+  if (response.status === 404) throw new Error('игрок не найден');
+  if (response.status === 429) throw new Error('слишком много запросов, подожди минуту');
+  if (!response.ok) throw new Error('Chess.com API: HTTP ' + response.status);
+
+  const payload = await response.json();
+  const archives = (payload.archives || []).slice(-3).reverse();
+  const games = [];
+  for (const archive of archives) {
+    const part = await fetch(archive);
+    if (!part.ok) continue;
+    const data = await part.json();
+    games.push(...(data.games || []).filter((game) => game.pgn &&
+      (!game.rules || game.rules === 'chess')));
+    if (games.length >= limit * 2) break;
+  }
+  games.sort((a, b) => (b.end_time || 0) - (a.end_time || 0));
+  return games.slice(0, limit).map((game) => ({
+    pgn: game.pgn,
+    white: (game.white && game.white.username) || '',
+    black: (game.black && game.black.username) || '',
+    white_result: (game.white && game.white.result) || '',
+    black_result: (game.black && game.black.result) || '',
+    time_class: game.time_class || '',
+    end_time: game.end_time || 0,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Отрисовка
+// ---------------------------------------------------------------------------
+
+function fmtDate(ts) {
+  if (!ts) return '';
+  const date = new Date(ts * 1000);
+  return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' +
+    date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtEval(move) {
+  if (move.mate_after_white !== null && move.mate_after_white !== undefined) {
+    return (move.mate_after_white >= 0 ? '#' : '#−') + Math.abs(move.mate_after_white);
+  }
+  const cp = move.eval_after_white || 0;
+  return (cp >= 0 ? '+' : '−') + (Math.abs(cp) / 100).toFixed(2);
+}
+
+function verdict(move) {
+  const icon = (move.icon || '').trim();
+  return (icon ? icon + ' ' : '') + (move.label || move.category || '');
+}
+
+function resultsOf(game) {
+  const white = (game.white_result || '').toLowerCase();
+  const black = (game.black_result || '').toLowerCase();
+  if (white === 'win') return { text: '1–0', kind: 'win' };
+  if (black === 'win') return { text: '0–1', kind: 'loss' };
+  return { text: '½–½', kind: 'draw' };
+}
+
+function renderGames() {
+  const box = $('gameList');
+  box.innerHTML = '';
+  if (!state.games.length) {
+    box.innerHTML = '<div class="empty">Партий не найдено.</div>';
+    return;
+  }
+  state.games.forEach((game, index) => {
+    const result = resultsOf(game);
+    const playerIsWhite = (game.white || '').toLowerCase() === state.player;
+    const item = document.createElement('button');
+    item.className = 'game' + (state.selected === index ? ' active' : '');
+    item.innerHTML = '<div class="top"><span class="opp"></span><span class="date"></span></div>' +
+      '<div class="res ' + result.kind + '"></div>';
+    item.querySelector('.opp').textContent = playerIsWhite ? game.black : game.white;
+    item.querySelector('.date').textContent = fmtDate(game.end_time);
+    item.querySelector('.res').textContent =
+      (playerIsWhite ? 'белые' : 'чёрные') + ' · ' + result.text + ' · ' + game.time_class;
+    item.addEventListener('click', () => selectGame(index));
+    box.appendChild(item);
+  });
+}
+
+function selectGame(index) {
+  if (state.running) return;
+  state.selected = index;
+  state.moves = [];
+  $('moves').innerHTML = '';
+  $('summary').style.display = 'none';
+  $('summary').innerHTML = '';
+  $('bar').style.width = '0%';
+  $('barLabel').textContent = '';
+  $('tableEmpty').textContent = 'Таблица заполнится после разбора.';
+  const game = state.games[index];
+  const playerIsWhite = (game.white || '').toLowerCase() === state.player;
+  $('reviewTitle').textContent = game.white + ' — ' + game.black;
+  $('reviewMeta').textContent = (playerIsWhite ? 'ты играл белыми' : 'ты играл чёрными') +
+    ' · ' + game.time_class + ' · ' + resultsOf(game).text;
+  $('reviewBtn').disabled = false;
+  renderGames();
+}
+
+function setEngineStatus(text, kind) {
+  const element = $('engineStatus');
+  element.textContent = text;
+  element.className = 'engine' + (kind ? ' ' + kind : '');
+}
+
+function addRow(move) {
+  const row = document.createElement('tr');
+  row.innerHTML = '<td></td><td class="san"></td><td class="verdict"></td>' +
+    '<td class="eval"></td><td class="acc"></td><td class="acc"></td>';
+  const cells = row.children;
+  cells[0].textContent = move.move_number + (move.color === 'w' ? '.' : '…');
+  cells[1].textContent = move.san || move.uci || '?';
+  cells[1].title = move.color === 'w' ? 'белые' : 'чёрные';
+  cells[2].textContent = verdict(move);
+  cells[2].style.color = move.color_hex || 'var(--text)';
+  cells[3].textContent = fmtEval(move);
+  cells[4].textContent = (move.accuracy || 0).toFixed(0) + '%';
+  cells[5].textContent = (move.cp_loss || 0).toFixed(0);
+  $('moves').appendChild(row);
+}
+
+const COUNT_LABELS = [
+  ['brilliant', '💎 блестящих'], ['great', '🔥 отличных'], ['best', '✅ лучших'],
+  ['excellent', '👍 превосходных'], ['good', '🙂 хороших'], ['inaccuracy', '🤔 неточностей'],
+  ['mistake', '❌ ошибок'], ['blunder', '💀 зевков'], ['miss', '😬 упущенных шансов'],
+];
+
+function summaryFor(moves) {
+  const sides = { w: { acc: [], loss: [], counts: {} }, b: { acc: [], loss: [], counts: {} } };
+  let worst = null;
+  for (const move of moves) {
+    const side = sides[move.color];
+    if (!side) continue;
+    side.acc.push(move.accuracy || 0);
+    side.loss.push(move.cp_loss || 0);
+    side.counts[move.category] = (side.counts[move.category] || 0) + 1;
+    if (!worst || (move.cp_loss || 0) > (worst.cp_loss || 0)) worst = move;
+  }
+  const avg = (list) => (list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0);
+  return {
+    white: { accuracy: avg(sides.w.acc), loss: avg(sides.w.loss), counts: sides.w.counts },
+    black: { accuracy: avg(sides.b.acc), loss: avg(sides.b.loss), counts: sides.b.counts },
+    worst,
+  };
+}
+
+function renderSummary(moves) {
+  const summary = summaryFor(moves);
+  const game = state.games[state.selected];
+  const playerIsWhite = (game.white || '').toLowerCase() === state.player;
+  const mine = playerIsWhite ? summary.white : summary.black;
+  const theirs = playerIsWhite ? summary.black : summary.white;
+  const chips = COUNT_LABELS
+    .filter(([key]) => mine.counts[key])
+    .map(([key, label]) => '<span class="chip">' + label + ': ' + mine.counts[key] + '</span>')
+    .join('');
+  let worstLine = '';
+  if (summary.worst) {
+    const worst = summary.worst;
+    worstLine = '<br>Худший ход: <b style="color:' + (worst.color_hex || '#ff7b72') + '">' +
+      worst.move_number + (worst.color === 'w' ? '.' : '…') + ' ' + worst.san +
+      ' — ' + verdict(worst) + '</b>, потеря ' + (worst.cp_loss || 0).toFixed(0) + ' cp';
+  }
+  $('summary').innerHTML =
+    'Точность: <b>' + mine.accuracy.toFixed(1) + '%</b> у тебя, ' +
+    theirs.accuracy.toFixed(1) + '% у соперника<br>' +
+    'Средняя потеря: ' + mine.loss.toFixed(0) + ' cp у тебя, ' +
+    theirs.loss.toFixed(0) + ' cp у соперника' + worstLine +
+    (chips ? '<div class="chips">' + chips + '</div>' : '');
+  $('summary').style.display = 'block';
+}
+
+// ---------------------------------------------------------------------------
+// Действия
+// ---------------------------------------------------------------------------
+
+async function findGames() {
+  const username = $('username').value.trim();
+  if (!/^[A-Za-z0-9_-]{2,32}$/.test(username)) {
+    $('findStatus').textContent = 'ник: 2–32 символа (буквы, цифры, _ и -)';
+    return;
+  }
+  state.player = username.toLowerCase();
+  $('findStatus').textContent = 'ищу партии…';
+  $('find').disabled = true;
+  try {
+    state.games = await latestGames(username, Number($('limit').value));
+    state.selected = null;
+    $('reviewBtn').disabled = true;
+    $('findStatus').textContent = 'партий: ' + state.games.length;
+    renderGames();
+  } catch (error) {
+    $('findStatus').textContent = error.message;
+  } finally {
+    $('find').disabled = false;
+  }
+}
+
+async function ensureEngine() {
+  if (!state.engine) state.engine = new Engine();
+  if (state.engineReady) return state.engine;
+  setEngineStatus('загружаю движок (7 МБ, один раз)…');
+  await state.engine.start();
+  state.engineReady = true;
+  setEngineStatus(state.engine.name + ' · готов', 'ok');
+  return state.engine;
+}
+
+async function startReview() {
+  if (state.running || state.selected === null) return;
+  const game = state.games[state.selected];
+  const depth = Number($('depth').value);
+  const movetime = depth >= 14 ? 2500 : depth >= 12 ? 1500 : 900;
+
+  state.running = true;
+  state.cancel = false;
+  state.moves = [];
+  $('reviewBtn').disabled = true;
+  $('cancelBtn').style.display = 'inline-block';
+  $('moves').innerHTML = '';
+  $('summary').style.display = 'none';
+  $('tableEmpty').textContent = '';
+  $('bar').style.width = '0%';
+  $('barLabel').textContent = 'готовлю движок…';
+
+  try {
+    const engine = await ensureEngine();
+    $('barLabel').textContent = '0 / ?';
+    await reviewGame({
+      engine,
+      pgn: game.pgn,
+      depth,
+      movetime,
+      onProgress: (index, total, move) => {
+        state.moves.push(move);
+        addRow(move);
+        $('bar').style.width = (index / total * 100) + '%';
+        $('barLabel').textContent = index + ' / ' + total;
+        const wrap = document.querySelector('.tablewrap');
+        wrap.scrollTop = wrap.scrollHeight;
+      },
+      shouldCancel: () => state.cancel,
+    });
+    if (!state.cancel && state.moves.length) {
+      renderSummary(state.moves);
+      $('barLabel').textContent = 'готово: ' + state.moves.length + ' ходов';
+      $('bar').style.width = '100%';
+    } else if (state.cancel) {
+      $('barLabel').textContent = 'отменено на ' + state.moves.length + ' ходах';
+    }
+  } catch (error) {
+    $('barLabel').textContent = 'ошибка: ' + error.message;
+    setEngineStatus('движок: ошибка', 'bad');
+  } finally {
+    state.running = false;
+    $('reviewBtn').disabled = state.selected === null;
+    $('cancelBtn').style.display = 'none';
+  }
+}
+
+$('find').addEventListener('click', findGames);
+$('username').addEventListener('keydown', (event) => { if (event.key === 'Enter') findGames(); });
+$('reviewBtn').addEventListener('click', startReview);
+$('cancelBtn').addEventListener('click', () => {
+  state.cancel = true;
+  if (state.engine) state.engine.stop();
+});
+</script>
+</body>
+</html>
